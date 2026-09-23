@@ -1,6 +1,6 @@
-""" . "说明"Adds Discogs album search support to the autotagger. Requires the
+"""Adds Discogs album search support to the autotagger. Requires the
 python3-discogs-client library.
-""" . "说明"
+"""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ CONNECTION_ERRORS = (
 )
 
 TRACK_INDEX_RE = re.compile(
-    r""" . "说明"
+    r"""
     (.*?)   # medium: everything before medium_index.
     (\d*?)  # medium_index: a number at the end of
             # `position`, except if followed by a subtrack index.
@@ -64,7 +64,7 @@ TRACK_INDEX_RE = re.compile(
         (?<=\w)\.[\w]+  # a dot followed by a string (A.1, 2.A)
       | (?<=\d)[A-Z]+   # a string that follows a number (1A, B2a)
     )?
-    """ . "说明",
+    """,
     re.VERBOSE,
 )
 
@@ -81,19 +81,41 @@ FIELDS_TO_DISCOGS_KEYS = {
     "year": "year",
 }
 
-MEDIA_FORMAT_ALIASES = {"digital media", "web"}
+#: Canonical medium beets uses for local digital files. Both the matcher and
+#: the metadata pipeline compare media values as plain strings, so every
+#: digital-media spelling from Discogs has to become this before it leaves
+#: the plugin.
+FILE_MEDIA = "File"
+
+#: Discogs format names (and local media spellings) that describe a digital
+#: download rather than a physical medium. Matched case-insensitively.
+MEDIA_FORMAT_ALIASES = frozenset({"digital media", "web"})
+
+
+def normalize_media(media: str | None) -> str | None:
+    """Normalize digital-media aliases to beets' ``File`` medium.
+
+    Discogs reports some digital releases as ``Digital Media`` or ``WEB``
+    instead of the ``File`` name beets uses for local files, and the matcher
+    compares media values verbatim. Such aliases are therefore mapped to
+    ``File`` before entering the matcher, while unknown media types (as well
+    as ``None`` or empty values) are returned unchanged.
+    """
+    if media is not None and media.strip().casefold() in MEDIA_FORMAT_ALIASES:
+        return FILE_MEDIA
+    return media
 
 
 def parse_release_date(
     released: str | None, year: int | None
 ) -> tuple[int | None, int | None, int | None]:
-    """ . "说明"Return the ``(year, month, day)`` a release was issued on.
+    """Return the ``(year, month, day)`` a release was issued on.
 
     Discogs reports the year of a release in its own field but the rest of
     the date only as part of `released`, which is absent or partial for many
     releases. `year` is therefore used for any component `released` does not
     provide.
-    """ . "说明"
+    """
     if not (m := RELEASE_DATE_RE.fullmatch((released or "").strip())):
         return year, None, None
 
@@ -134,11 +156,11 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
 
     @cached_property
     def extra_discogs_field_by_tag(self) -> dict[str, str]:
-        """ . "说明"Map configured extra tags to Discogs API search parameters.
+        """Map configured extra tags to Discogs API search parameters.
 
         Process user configuration to determine which additional Discogs
         fields should be included in search queries.
-        """ . "说明"
+        """
         field_by_tag = {
             tag: FIELDS_TO_DISCOGS_KEYS[tag]
             for tag in self.config["extra_tags"].as_str_seq()
@@ -152,7 +174,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return field_by_tag
 
     def setup(self, session: ImportSession | None = None) -> None:
-        """ . "说明"Create the `discogs_client` field. Authenticate if necessary.""" . "说明"
+        """Create the `discogs_client` field. Authenticate if necessary."""
         c_key = self.config["apikey"].as_str()
         c_secret = self.config["apisecret"].as_str()
 
@@ -178,12 +200,12 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         self.discogs_client = Client(USER_AGENT, c_key, c_secret, token, secret)
 
     def reset_auth(self) -> None:
-        """ . "说明"Delete token file & redo the auth steps.""" . "说明"
+        """Delete token file & redo the auth steps."""
         os.remove(self._tokenfile())
         self.setup()
 
     def _tokenfile(self) -> str:
-        """ . "说明"Get the path to the JSON file for storing the OAuth token.""" . "说明"
+        """Get the path to the JSON file for storing the OAuth token."""
         return self.config["tokenfile"].get(confuse.Filename(in_app_dir=True))
 
     def authenticate(self, c_key: str, c_secret: str) -> tuple[str, str]:
@@ -218,7 +240,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
     def get_track_from_album(
         self, album_info: AlbumInfo, compare: Callable[[TrackInfo], float]
     ) -> TrackInfo | None:
-        """ . "说明"Return the best matching track of the release.""" . "说明"
+        """Return the best matching track of the release."""
         scores_and_tracks = [(compare(t), t) for t in album_info.tracks]
         score, track_info = min(scores_and_tracks, key=lambda x: x[0])
         if score > 0.3:
@@ -241,9 +263,9 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return filter(None, tracks)
 
     def album_for_id(self, album_id: str) -> AlbumInfo | None:
-        """ . "说明"Fetches an album by its Discogs ID and returns an AlbumInfo object
+        """Fetches an album by its Discogs ID and returns an AlbumInfo object
         or None if the album is not found.
-        """ . "说明"
+        """
         discogs_id = self._extract_id(album_id)
 
         if not discogs_id:
@@ -282,11 +304,11 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         name: str,
         va_likely: bool,
     ) -> tuple[str, dict[str, str]]:
-        """ . "说明"Build a Discogs release query and fixed release-type filter.
+        """Build a Discogs release query and fixed release-type filter.
 
         The query is normalized to improve hit rates for punctuation-heavy album
         names and medium suffixes that can reduce recall.
-        """ . "说明"
+        """
 
         query = f"{artist} {name}" if va_likely else name
         # Strip non-word characters from query. Things like "!" and "-" can
@@ -307,10 +329,11 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
             values = (item.get(tag) for item in items)
 
             if tag == "media":
+                # Unify digital-media aliases before picking the plurality so
+                # that, e.g., a mix of "Digital Media" and "WEB" counts as the
+                # same ``File`` medium.
                 values = (
-                    "File"
-                    if str(value).casefold() in MEDIA_FORMAT_ALIASES
-                    else value
+                    normalize_media(str(value)) if value is not None else None
                     for value in values
                 )
 
@@ -319,6 +342,9 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
                 continue
 
             value = str(most_common)
+            if tag == "media" and not value:
+                # Do not constrain the search with an unset local media.
+                continue
             if tag == "catalognum":
                 value = value.replace(" ", "")
 
@@ -327,7 +353,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return query, filters
 
     def get_search_response(self, params: SearchParams) -> Sequence[IDResponse]:
-        """ . "说明"Search Discogs releases and return raw result mappings with IDs.""" . "说明"
+        """Search Discogs releases and return raw result mappings with IDs."""
 
         def search() -> list[IDResponse]:
             results = self.discogs_client.search(params.query, **params.filters)
@@ -344,9 +370,9 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
 
     @cache
     def get_master_year(self, master_id: str) -> int | None:
-        """ . "说明"Fetches a master release given its Discogs ID and returns its year
+        """Fetches a master release given its Discogs ID and returns its year
         or None if the master release is not found.
-        """ . "说明"
+        """
         self._log.debug("Getting master release {}", master_id)
         result = Master(self.discogs_client, {"id": master_id})
 
@@ -375,12 +401,12 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         if formats and (first_format := formats[0]):
             if descriptions := first_format["descriptions"]:
                 albumtype = ", ".join(descriptions)
-            media = first_format["name"]
+            media = normalize_media(first_format["name"])
 
         return media, albumtype
 
     def get_album_info(self, result: Release) -> AlbumInfo | None:
-        """ . "说明"Returns an AlbumInfo object for a discogs Release object.""" . "说明"
+        """Returns an AlbumInfo object for a discogs Release object."""
         # Explicitly reload the `Release` fields, as they might not be yet
         # present if the result is from a `discogs_client.search()`.
         if not result.data.get("artists"):
@@ -501,7 +527,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         )
 
     def select_cover_art(self, result: Release) -> str | None:
-        """ . "说明"Returns the best candidate image, if any, from a Discogs `Release` object.""" . "说明"
+        """Returns the best candidate image, if any, from a Discogs `Release` object."""
         if result.data.get("images") and len(result.data.get("images")) > 0:
             # The first image in this list appears to be the one displayed first
             # on the release page - even if it is not flagged as `type: "primary"` - and
@@ -513,7 +539,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
     def get_tracks(
         self, tracklist: list[Track], albumartistinfo: ArtistState
     ) -> list[TrackInfo]:
-        """ . "说明"Returns a list of TrackInfo objects for a discogs tracklist.""" . "说明"
+        """Returns a list of TrackInfo objects for a discogs tracklist."""
         try:
             clean_tracklist: list[Track] = self._coalesce_tracks(tracklist)
         except Exception as exc:
@@ -591,7 +617,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return t.tracks
 
     def _subtrack_position(self, track: Track) -> str | None:
-        """ . "说明"Identify the physical position containing a flat audio subtrack.""" . "说明"
+        """Identify the physical position containing a flat audio subtrack."""
         if track["type_"] == "track":
             medium, medium_index, subindex = self.get_track_index(
                 track["position"]
@@ -601,7 +627,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return None
 
     def _coalesce_tracks(self, raw_tracklist: list[Track]) -> list[Track]:
-        """ . "说明"Normalize each Discogs tracklist entry by its declared kind.""" . "说明"
+        """Normalize each Discogs tracklist entry by its declared kind."""
         tracklist: list[Track] = []
         for position, tracks in groupby(
             raw_tracklist, key=self._subtrack_position
@@ -623,7 +649,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
 
     @staticmethod
     def _merge_subtracks(subtracks: list[AudioTrack]) -> AudioTrack:
-        """ . "说明"Combine flat Discogs subtracks representing one physical track.""" . "说明"
+        """Combine flat Discogs subtracks representing one physical track."""
         merged_track = subtracks[0].copy()
         merged_track["title"] = " / ".join(
             subtrack["title"] for subtrack in subtracks
@@ -633,7 +659,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
     def _coalesce_index_track(
         self, index_track: IndexTrack
     ) -> list[AudioTrack]:
-        """ . "说明"Convert an index container into its physical audio tracks.""" . "说明"
+        """Convert an index container into its physical audio tracks."""
         subtracks = index_track["sub_tracks"]
         if not subtracks:
             raise ValueError("Discogs index track does not contain subtracks")
@@ -674,9 +700,9 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return tracks
 
     def strip_disambiguation(self, text: str) -> str:
-        """ . "说明"Removes discogs specific disambiguations from a string.
+        """Removes discogs specific disambiguations from a string.
         Turns 'Label Name (5)' to 'Label Name' or 'Artist (1) & Another Artist (2)'
-        to 'Artist & Another Artist'. Does nothing if strip_disambiguation is False.""" . "说明"
+        to 'Artist & Another Artist'. Does nothing if strip_disambiguation is False."""
         if not self.config["strip_disambiguation"]:
             return text
         return DISAMBIGUATION_RE.sub("", text)
@@ -688,7 +714,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         divisions: list[str],
         albumartistinfo: ArtistState,
     ) -> tuple[TrackInfo, str | None, str | None]:
-        """ . "说明"Returns a TrackInfo object for a discogs track.""" . "说明"
+        """Returns a TrackInfo object for a discogs track."""
 
         title = track["title"]
         if self.config["index_tracks"]:
@@ -724,8 +750,8 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
     def get_track_index(
         position: str,
     ) -> tuple[str | None, str | None, str | None]:
-        """ . "说明"Returns the medium, medium index and subtrack index for a discogs
-        track position.""" . "说明"
+        """Returns the medium, medium index and subtrack index for a discogs
+        track position."""
         # Match the standard Discogs positions (12.2.9), which can have several
         # forms (1, 1-1, A1, A1.1, A1a, ...).
         medium = index = subindex = None
@@ -738,7 +764,7 @@ class DiscogsPlugin(SearchApiMetadataSourcePlugin[IDResponse]):
         return medium or None, index or None, subindex or None
 
     def get_track_length(self, duration: str) -> int | None:
-        """ . "说明"Returns the track length in seconds for a discogs duration.""" . "说明"
+        """Returns the track length in seconds for a discogs duration."""
         try:
             length = time.strptime(duration, "%M:%S")
         except ValueError:
