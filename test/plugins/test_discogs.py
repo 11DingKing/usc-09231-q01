@@ -1,4 +1,4 @@
-""" . "说明"Tests for discogs plugin.""" . "说明"
+"""Tests for discogs plugin."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ def get_release(data: dict[str, Any]) -> Release:
 
 @pytest.fixture(autouse=True)
 def _patch_discogs_setup(monkeypatch):
-    """ . "说明"Autouse fixture to patch DiscogsPlugin.setup for each test.""" . "说明"
+    """Autouse fixture to patch DiscogsPlugin.setup for each test."""
     monkeypatch.setattr(
         "beetsplug.discogs.DiscogsPlugin.setup", lambda *_: None
     )
@@ -79,11 +79,11 @@ class DiscogsTestMixin:
         return plugin
 
     def _make_release(self, tracks=None):
-        """ . "说明"Return discogs_client.Release.
+        """Return discogs_client.Release.
 
         The returned object is incomplete, including just the fields required
         for tests in this module.
-        """ . "说明"
+        """
         data = {
             "id": 11111111,
             "uri": "https://www.discogs.com/release/111111111",
@@ -107,7 +107,7 @@ class DiscogsTestMixin:
         return get_release(data)
 
     def _make_release_from_positions(self, positions):
-        """ . "说明"Return discogs_client.Release with tracks at the given positions.""" . "说明"
+        """Return discogs_client.Release with tracks at the given positions."""
         tracks = [
             audio_track(f"TITLE{i}", position)
             for (i, position) in enumerate(positions, start=1)
@@ -201,7 +201,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         assert t[3].medium_total == 1
 
     def test_parse_minimal_release(self):
-        """ . "说明"Test parsing of a release with the minimal amount of information.""" . "说明"
+        """Test parsing of a release with the minimal amount of information."""
         data = {
             "id": 123,
             "uri": "https://www.discogs.com/release/123456-something",
@@ -216,7 +216,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         assert len(d.tracks) == 1
 
     def test_default_genre_style_settings(self):
-        """ . "说明"Test genre default settings, genres to genre, styles to style""" . "说明"
+        """Test genre default settings, genres to genre, styles to style"""
         release = self._make_release_from_positions(["1", "2"])
 
         d = DiscogsPlugin().get_album_info(release)
@@ -224,7 +224,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         assert d.genres == ["GENRE1", "GENRE2"]
 
     def test_append_style_to_genre(self):
-        """ . "说明"Test appending style to genre if config enabled""" . "说明"
+        """Test appending style to genre if config enabled"""
         config["discogs"]["append_style_genre"] = True
         release = self._make_release_from_positions(["1", "2"])
 
@@ -233,7 +233,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         assert d.genres == ["GENRE1", "GENRE2", "STYLE1", "STYLE2"]
 
     def test_append_style_to_genre_no_styles(self):
-        """ . "说明"Test nothing appended to genre if style is empty""" . "说明"
+        """Test nothing appended to genre if style is empty"""
         config["discogs"]["append_style_genre"] = True
         release = self._make_release_from_positions(["1", "2"])
         release.data["genres"] = []
@@ -268,7 +268,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         assert (d.year, d.month, d.day) == expected
 
     def test_original_date_without_master(self):
-        """ . "说明"A release without a master release is its own original.""" . "说明"
+        """A release without a master release is its own original."""
         release = self._make_release_from_positions(["1"])
         release.data["released"] = "2000-08-13"
 
@@ -281,7 +281,7 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
         )
 
     def test_original_date_with_master(self, monkeypatch):
-        """ . "说明"Only the master release's year is known, so it alone is used.""" . "说明"
+        """Only the master release's year is known, so it alone is used."""
         monkeypatch.setattr(DiscogsPlugin, "get_master_year", lambda *_: 1990)
         release = self._make_release_from_positions(["1"])
         release.data["released"] = "2000-08-13"
@@ -295,6 +295,80 @@ class TestDGAlbumInfo(DiscogsTestMixin, TestHelper):
             None,
             None,
         )
+
+
+class TestMediaNormalization(DiscogsTestMixin):
+    """Regression tests for normalizing Discogs media format aliases.
+
+    Discogs reports digital releases as "Digital Media" or "WEB" while local
+    libraries use "File". The aliases must be unified before candidates reach
+    the matcher, otherwise identical releases fail to group with local files.
+    """
+
+    @staticmethod
+    def _set_format_name(release, name):
+        release.data["formats"] = [
+            {"descriptions": None, "name": name, "qty": 1}
+        ]
+        return release
+
+    @pytest.mark.parametrize(
+        "format_name",
+        ["Digital Media", "digital media", "DIGITAL MEDIA", "WEB", "web", "Web"],
+    )
+    def test_aliases_normalize_to_file(self, plugin, format_name):
+        """Aliases normalize to File on the album and every track."""
+        release = self._make_release_from_positions(["1", "2"])
+        self._set_format_name(release, format_name)
+
+        d = plugin.get_album_info(release)
+
+        assert d.media == "File"
+        assert [t.media for t in d.tracks] == ["File", "File"]
+
+    def test_aliases_normalize_across_mediums(self, plugin):
+        """Multi-disc releases normalize media without disturbing mediums."""
+        release = self._make_release_from_positions(
+            ["1-1", "1-2", "2-1", "2-2"]
+        )
+        self._set_format_name(release, "WEB")
+
+        d = plugin.get_album_info(release)
+
+        assert d.media == "File"
+        assert d.mediums == 2
+        assert [t.medium for t in d.tracks] == [1, 1, 2, 2]
+        assert [t.medium_index for t in d.tracks] == [1, 2, 1, 2]
+        assert {t.media for t in d.tracks} == {"File"}
+
+    @pytest.mark.parametrize("format_name", ["Vinyl", "CD", "Blu-ray"])
+    def test_unknown_media_preserved(self, plugin, format_name):
+        """Formats outside the alias set keep their original value."""
+        release = self._make_release_from_positions(["1", "2"])
+        self._set_format_name(release, format_name)
+
+        d = plugin.get_album_info(release)
+
+        assert d.media == format_name
+        assert {t.media for t in d.tracks} == {format_name}
+
+    @pytest.mark.parametrize(
+        "formats",
+        [
+            _p(None, id="missing"),
+            _p([], id="empty-list"),
+            _p([{}], id="empty-format"),
+        ],
+    )
+    def test_empty_formats_keep_none_media(self, plugin, formats):
+        """Releases without format data keep media unset, not "File"."""
+        release = self._make_release_from_positions(["1", "2"])
+        release.data["formats"] = formats
+
+        d = plugin.get_album_info(release)
+
+        assert d.media is None
+        assert {t.media for t in d.tracks} == {None}
 
 
 class TestStripDisambiguation(DiscogsTestMixin):
@@ -323,7 +397,7 @@ class TestStripDisambiguation(DiscogsTestMixin):
 
     @pytest.mark.parametrize("plugin_config", [{"strip_disambiguation": True}])
     def test_strip_disambiguation(self, album_info):
-        """ . "说明"Test removing disambiguation from all disambiguated fields.""" . "说明"
+        """Test removing disambiguation from all disambiguated fields."""
         assert album_info.artist == "ARTIST NAME & OTHER ARTIST"
         assert album_info.artists == ["ARTIST NAME", "OTHER ARTIST"]
         assert album_info.artists_ids == ["321", "322"]
@@ -335,7 +409,7 @@ class TestStripDisambiguation(DiscogsTestMixin):
 
     @pytest.mark.parametrize("plugin_config", [{"strip_disambiguation": False}])
     def test_dont_strip_disambiguation(self, album_info):
-        """ . "说明"Test disabling disambiguation removal from all disambiguated fields.""" . "说明"
+        """Test disabling disambiguation removal from all disambiguated fields."""
         assert album_info.artist == "ARTIST NAME (2) & OTHER ARTIST (5)"
         assert album_info.artists == ["ARTIST NAME (2)", "OTHER ARTIST (5)"]
         assert album_info.tracks[0].artist == "TEST ARTIST (5)"
@@ -477,14 +551,14 @@ class TestTracklist(DiscogsTestMixin):
         assert [(t.title, t.disctitle) for t in album.tracks] == expected_tracks
 
     def test_parse_tracklist_inherited_artists(self, plugin):
-        """ . "说明"Verify grouped tracks combine explicit and inherited artist credits.
+        """Verify grouped tracks combine explicit and inherited artist credits.
 
         This covers releases where a track group provides the default artist for
         sub-tracks that do not declare one themselves.
 
         Note: this is based on the following release:
         https://www.discogs.com/release/3647530
-        """ . "说明"
+        """
         track_artist = "TRACK ARTIST"
         group_artist = "GROUP ARTIST"
         tracks = [
@@ -522,7 +596,7 @@ class TestTracklist(DiscogsTestMixin):
 
 class TestDGSearchQuery(TestHelper):
     def test_default_search_filters_without_extra_tags(self):
-        """ . "说明"Discogs search uses only the type filter when no extra_tags are set.""" . "说明"
+        """Discogs search uses only the type filter when no extra_tags are set."""
         plugin = DiscogsPlugin()
         items = [Item()]
 
@@ -534,7 +608,7 @@ class TestDGSearchQuery(TestHelper):
         assert filters == {"type": "release"}
 
     def test_extra_tags_populate_discogs_filters(self):
-        """ . "说明"Configured extra_tags should populate Discogs search filters.""" . "说明"
+        """Configured extra_tags should populate Discogs search filters."""
         plugin = DiscogsPlugin()
         plugin.config["extra_tags"] = ["label", "catalognum"]
 
@@ -590,6 +664,20 @@ class TestDGSearchQuery(TestHelper):
         )
 
         assert filters["format"] == "File"
+        config["discogs"]["extra_tags"] = []
+
+    def test_extra_tags_normalize_media_empty_field(self):
+        """Items without a media value must not emit a format filter."""
+        plugin = DiscogsPlugin()
+        plugin.config["extra_tags"] = ["media"]
+
+        items = [Item(), Item()]
+
+        _query, filters = plugin.get_search_query_with_filters(
+            "album", items, "Artist", "Album", False
+        )
+
+        assert filters == {"type": "release"}
         config["discogs"]["extra_tags"] = []
 
 
@@ -751,9 +839,9 @@ class TestAnv:
 
 
 def test_anv_album_artist():
-    """ . "说明"Test using artist name variations when the album artist
+    """Test using artist name variations when the album artist
     is the same as the track artist, but only the track artist
-    should use the artist name variation.""" . "说明"
+    should use the artist name variation."""
     data = {
         "id": 123,
         "uri": "https://www.discogs.com/release/123456-something",
@@ -785,8 +873,8 @@ def test_anv_album_artist():
 
 
 def test_parse_featured_artists():
-    """ . "说明"Tests the plugins ability to parse a featured artist.
-    Ignores artists that are not listed as featured.""" . "说明"
+    """Tests the plugins ability to parse a featured artist.
+    Ignores artists that are not listed as featured."""
     track = {
         "type_": "track",
         "title": "track",
@@ -851,8 +939,10 @@ def test_parse_extraartist_roles():
 @pytest.mark.parametrize(
     "formats, expected_media, expected_albumtype",
     [
-        (None, None, None),
-        (
+        _p(None, None, None, id="no-formats"),
+        _p([], None, None, id="empty-formats"),
+        _p([{}], None, None, id="empty-format"),
+        _p(
             [
                 {
                     "descriptions": ['7"', "Single", "45 RPM"],
@@ -862,6 +952,43 @@ def test_parse_extraartist_roles():
             ],
             "Vinyl",
             '7", Single, 45 RPM',
+            id="vinyl",
+        ),
+        _p(
+            [{"descriptions": None, "name": "Digital Media", "qty": 1}],
+            "File",
+            None,
+            id="digital-media-alias",
+        ),
+        _p(
+            [{"descriptions": None, "name": "WEB", "qty": 1}],
+            "File",
+            None,
+            id="web-alias",
+        ),
+        _p(
+            [{"descriptions": None, "name": "digital media", "qty": 1}],
+            "File",
+            None,
+            id="alias-lowercase",
+        ),
+        _p(
+            [{"descriptions": None, "name": "Web", "qty": 1}],
+            "File",
+            None,
+            id="alias-mixed-case",
+        ),
+        _p(
+            [{"descriptions": None, "name": "Blu-ray", "qty": 1}],
+            "Blu-ray",
+            None,
+            id="unknown-format-preserved",
+        ),
+        _p(
+            [{"descriptions": None, "name": "", "qty": 1}],
+            "",
+            None,
+            id="empty-format-name-preserved",
         ),
     ],
 )
